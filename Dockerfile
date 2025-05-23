@@ -1,16 +1,53 @@
-FROM gmolaire/yarn:1.22.4_12.18.3-alpine3.12
-MAINTAINER rhessing
 
-ARG DOWNLOAD_URL="https://github.com/cfculhane/compare/archive/refs/heads/master.zip"
+##############################################################################
+# Base with dependencies
+##############################################################################
+FROM node:16-bookworm-slim AS base
 
-WORKDIR /usr/local/app
+WORKDIR /app
+COPY package.json yarn.lock ./
+RUN yarn install
 
-RUN apk --update add wget unzip && \
-	wget --no-check-certificate ${DOWNLOAD_URL} && \
-	unzip master.zip && \
-	mv compare-master/* /usr/local/app/ && \
-	cd /usr/local/app && \
-	yarn install && \
-	yarn build
+##############################################################################
+# Builder
+##############################################################################
+FROM base AS builder
 
-CMD [ "yarn", "serve" ]
+ENV NODE_ENV=production
+
+COPY ./ ./
+RUN yarn build:spa
+
+##############################################################################
+# Runtime with nginx
+##############################################################################
+FROM nginx:stable-alpine AS production
+RUN cat > /etc/nginx/conf.d/default.conf <<'EOF'
+server {
+  listen 80;
+  server_tokens off;
+
+  root /usr/share/nginx/html/;
+
+  location / {
+    gzip_static on;
+    try_files $uri @index;
+  }
+
+  location @index {
+    gzip_static on;
+
+    add_header Cache-Control no-cache;
+    add_header X-Content-Type-Options nosniff;
+    add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+    add_header Referrer-Policy "strict-origin";
+
+    expires 0;
+    try_files /index.html =404;
+  }
+}
+EOF
+COPY --from=builder /app/spa/ /usr/share/nginx/html/
+
+# Expose port 80
+EXPOSE 80
